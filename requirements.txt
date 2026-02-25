@@ -1,10 +1,7 @@
-python-telegram-bot[job-queue]==20.7
-openai
-pandas
-numpy
-yfinance
-xgboost
-scikit-learn
-joblib
+python-telegram-bot[job-queue]
 python-dotenv
-pytz
+pandas
+yfinance
+joblib
+openai
+numpy
