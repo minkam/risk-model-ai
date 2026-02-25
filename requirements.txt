@@ -1,12 +1,10 @@
-python-telegram-bot[job-queue]==22.6
-openai==2.24.0
-python-dotenv==1.2.1
-pytz==2025.2
-requests==2.32.5
+python-telegram-bot[job-queue]==20.7
+openai
 pandas
 numpy
 yfinance
 xgboost
 scikit-learn
 joblib
-apscheduler
+python-dotenv
+pytz
