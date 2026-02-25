@@ -1,61 +1,40 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+import datetime
 
-# ===============================
-# STOCK UNIVERSE
-# ===============================
 
-STOCKS = [
-    "AAPL","MSFT","NVDA","TSLA","META","AMZN","GOOGL","AMD",
-    "SPY","QQQ","PLTR","SMCI","COIN","NFLX","BA","DIS"
-]
+# ================================
+# STOCK SCAN
+# ================================
 
-# ===============================
-# CRYPTO UNIVERSE
-# ===============================
-
-CRYPTO = [
-    "BTC-USD","ETH-USD","SOL-USD","XRP-USD",
-    "DOGE-USD","AVAX-USD","ADA-USD","LINK-USD"
-]
-
-# ===============================
-# SCAN FUNCTION
-# ===============================
-
-def scan_market(asset_type="all"):
+def scan_stocks():
+    tickers = ["AAPL", "TSLA", "NVDA", "AMD", "MSFT", "META", "AMZN", "SPY"]
 
     results = []
-
-    tickers = []
-
-    if asset_type == "stocks":
-        tickers = STOCKS
-    elif asset_type == "crypto":
-        tickers = CRYPTO
-    else:
-        tickers = STOCKS + CRYPTO
 
     for ticker in tickers:
         try:
             df = yf.download(ticker, period="3mo", progress=False)
 
-            if df.empty:
+            if df.empty or len(df) < 20:
                 continue
 
-            df["50ma"] = df["Close"].rolling(50).mean()
-            df["200ma"] = df["Close"].rolling(200).mean()
+            df["SMA20"] = df["Close"].rolling(20).mean()
+            df["Volume_Avg"] = df["Volume"].rolling(20).mean()
 
-            latest = df.iloc[-1]
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
 
-            trend = "Bullish" if latest["Close"] > latest["50ma"] else "Bearish"
+            relative_volume = last["Volume"] / last["Volume_Avg"] if last["Volume_Avg"] != 0 else 0
+            momentum = (last["Close"] - prev["Close"]) / prev["Close"] * 100
 
-            results.append({
-                "ticker": ticker,
-                "price": round(float(latest["Close"]), 2),
-                "trend": trend
-            })
+            if relative_volume > 1.5 and momentum > 1:
+                results.append({
+                    "ticker": ticker,
+                    "price": round(last["Close"], 2),
+                    "rv": round(relative_volume, 2),
+                    "momentum": round(momentum, 2)
+                })
 
         except:
             continue
@@ -63,49 +42,96 @@ def scan_market(asset_type="all"):
     return results
 
 
-# ===============================
-# EOD REPORT
-# ===============================
+# ================================
+# CRYPTO SCAN
+# ================================
+
+def scan_crypto():
+    cryptos = ["BTC-USD", "ETH-USD", "SOL-USD", "AVAX-USD", "DOGE-USD"]
+
+    results = []
+
+    for coin in cryptos:
+        try:
+            df = yf.download(coin, period="3mo", progress=False)
+
+            if df.empty or len(df) < 20:
+                continue
+
+            df["Volume_Avg"] = df["Volume"].rolling(20).mean()
+
+            last = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            relative_volume = last["Volume"] / last["Volume_Avg"] if last["Volume_Avg"] != 0 else 0
+            momentum = (last["Close"] - prev["Close"]) / prev["Close"] * 100
+
+            if relative_volume > 1.5 and momentum > 2:
+                results.append({
+                    "ticker": coin,
+                    "price": round(last["Close"], 2),
+                    "rv": round(relative_volume, 2),
+                    "momentum": round(momentum, 2)
+                })
+
+        except:
+            continue
+
+    return results
+
+
+# ================================
+# EOD REPORT (FIXED)
+# ================================
 
 def generate_eod_report():
-
     spy = yf.download("SPY", period="5d", progress=False)
-    btc = yf.download("BTC-USD", period="5d", progress=False)
 
-    spy_change = round(((spy["Close"][-1] - spy["Close"][-2]) / spy["Close"][-2]) * 100, 2)
-    btc_change = round(((btc["Close"][-1] - btc["Close"][-2]) / btc["Close"][-2]) * 100, 2)
+    if spy.empty or len(spy) < 2:
+        return "Not enough SPY data."
 
-    report = f"""
+    close_today = spy["Close"].iloc[-1]
+    close_yesterday = spy["Close"].iloc[-2]
+
+    spy_change = round(((close_today - close_yesterday) / close_yesterday) * 100, 2)
+
+    return f"""
 📊 END OF DAY REPORT
 
-SPY: {spy_change}%
-BTC: {btc_change}%
+SPY Change: {spy_change}%
 
-Market closed at {datetime.now().strftime('%I:%M %p')}
+Market Bias:
+{"Bullish" if spy_change > 0 else "Bearish"}
+
+Volatility: Moderate
+Tomorrow Focus: Watch pre-market volume
 """
 
-    return report
 
-
-# ===============================
-# MARKET OPEN REPORT
-# ===============================
+# ================================
+# MARKET OPEN REPORT (FIXED)
+# ================================
 
 def generate_open_report():
-
     spy = yf.download("SPY", period="5d", progress=False)
-    btc = yf.download("BTC-USD", period="5d", progress=False)
 
-    spy_change = round(((spy["Close"][-1] - spy["Close"][-2]) / spy["Close"][-2]) * 100, 2)
-    btc_change = round(((btc["Close"][-1] - btc["Close"][-2]) / btc["Close"][-2]) * 100, 2)
+    if spy.empty or len(spy) < 2:
+        return "Not enough SPY data."
 
-    report = f"""
+    close_today = spy["Close"].iloc[-1]
+    close_yesterday = spy["Close"].iloc[-2]
+
+    spy_change = round(((close_today - close_yesterday) / close_yesterday) * 100, 2)
+
+    return f"""
 🔔 MARKET OPEN REPORT
 
-SPY overnight: {spy_change}%
-BTC overnight: {btc_change}%
+Overnight SPY Change: {spy_change}%
 
-Market open scan ready.
+Opening Bias:
+{"Bullish Open" if spy_change > 0 else "Weak Open"}
+
+Plan:
+• Watch first 15min range
+• Monitor relative volume spikes
 """
-
-    return report
