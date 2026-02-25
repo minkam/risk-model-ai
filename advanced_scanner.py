@@ -1,90 +1,111 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
+from datetime import datetime
 
-# --- STOCK UNIVERSE ---
+# ===============================
+# STOCK UNIVERSE
+# ===============================
+
 STOCKS = [
-    "AAPL","MSFT","NVDA","AMZN","META","TSLA","AMD","NFLX","GOOGL",
-    "SHOP","COIN","PLTR","CRWD","SNOW","ZS","DDOG","ROKU"
+    "AAPL","MSFT","NVDA","TSLA","META","AMZN","GOOGL","AMD",
+    "SPY","QQQ","PLTR","SMCI","COIN","NFLX","BA","DIS"
 ]
 
-# --- CRYPTO UNIVERSE ---
+# ===============================
+# CRYPTO UNIVERSE
+# ===============================
+
 CRYPTO = [
-    "BTC-USD","ETH-USD","SOL-USD","BNB-USD","XRP-USD",
-    "DOGE-USD","ADA-USD","AVAX-USD","LINK-USD"
+    "BTC-USD","ETH-USD","SOL-USD","XRP-USD",
+    "DOGE-USD","AVAX-USD","ADA-USD","LINK-USD"
 ]
 
+# ===============================
+# SCAN FUNCTION
+# ===============================
 
-def calculate_features(df):
-    df["sma20"] = df["Close"].rolling(20).mean()
-    df["sma50"] = df["Close"].rolling(50).mean()
-    df["rsi"] = 100 - (100 / (1 + df["Close"].pct_change().rolling(14).mean()))
-    df["volume_avg"] = df["Volume"].rolling(20).mean()
+def scan_market(asset_type="all"):
 
-    df["relative_volume"] = df["Volume"] / df["volume_avg"]
-
-    df["momentum_5"] = df["Close"].pct_change(5)
-    df["momentum_7"] = df["Close"].pct_change(7)
-
-    return df
-
-
-def score_asset(df):
-    latest = df.iloc[-1]
-
-    score = 0
-
-    if latest["Close"] > latest["sma20"]:
-        score += 1
-    if latest["Close"] > latest["sma50"]:
-        score += 1
-    if latest["momentum_5"] > 0:
-        score += 1
-    if latest["relative_volume"] > 1.2:
-        score += 1
-
-    return score
-
-
-def scan_list(symbols):
     results = []
 
-    for symbol in symbols:
+    tickers = []
+
+    if asset_type == "stocks":
+        tickers = STOCKS
+    elif asset_type == "crypto":
+        tickers = CRYPTO
+    else:
+        tickers = STOCKS + CRYPTO
+
+    for ticker in tickers:
         try:
-            df = yf.download(symbol, period="6mo", progress=False)
+            df = yf.download(ticker, period="3mo", progress=False)
 
             if df.empty:
                 continue
 
-            df = calculate_features(df)
-            score = score_asset(df)
+            df["50ma"] = df["Close"].rolling(50).mean()
+            df["200ma"] = df["Close"].rolling(200).mean()
+
+            latest = df.iloc[-1]
+
+            trend = "Bullish" if latest["Close"] > latest["50ma"] else "Bearish"
 
             results.append({
-                "symbol": symbol,
-                "score": score,
-                "price": round(df["Close"].iloc[-1], 2)
+                "ticker": ticker,
+                "price": round(float(latest["Close"]), 2),
+                "trend": trend
             })
 
         except:
             continue
 
-    results = sorted(results, key=lambda x: x["score"], reverse=True)
-
     return results
 
 
-def scan_market(asset_type="all"):
+# ===============================
+# EOD REPORT
+# ===============================
 
-    if asset_type == "stocks":
-        return scan_list(STOCKS)
+def generate_eod_report():
 
-    if asset_type == "crypto":
-        return scan_list(CRYPTO)
+    spy = yf.download("SPY", period="5d", progress=False)
+    btc = yf.download("BTC-USD", period="5d", progress=False)
 
-    stocks = scan_list(STOCKS)
-    crypto = scan_list(CRYPTO)
+    spy_change = round(((spy["Close"][-1] - spy["Close"][-2]) / spy["Close"][-2]) * 100, 2)
+    btc_change = round(((btc["Close"][-1] - btc["Close"][-2]) / btc["Close"][-2]) * 100, 2)
 
-    return {
-        "stocks": stocks,
-        "crypto": crypto
-    }
+    report = f"""
+📊 END OF DAY REPORT
+
+SPY: {spy_change}%
+BTC: {btc_change}%
+
+Market closed at {datetime.now().strftime('%I:%M %p')}
+"""
+
+    return report
+
+
+# ===============================
+# MARKET OPEN REPORT
+# ===============================
+
+def generate_open_report():
+
+    spy = yf.download("SPY", period="5d", progress=False)
+    btc = yf.download("BTC-USD", period="5d", progress=False)
+
+    spy_change = round(((spy["Close"][-1] - spy["Close"][-2]) / spy["Close"][-2]) * 100, 2)
+    btc_change = round(((btc["Close"][-1] - btc["Close"][-2]) / btc["Close"][-2]) * 100, 2)
+
+    report = f"""
+🔔 MARKET OPEN REPORT
+
+SPY overnight: {spy_change}%
+BTC overnight: {btc_change}%
+
+Market open scan ready.
+"""
+
+    return report
