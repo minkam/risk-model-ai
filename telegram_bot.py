@@ -11,37 +11,39 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
+if not BOT_TOKEN or not CHAT_ID:
+    raise ValueError("BOT_TOKEN or CHAT_ID not found in .env")
+
 # ===============================
 # COMMANDS
 # ===============================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 Risk Model AI Online\n\n"
-        "/scan\n"
-        "/stocks\n"
-        "/crypto\n"
-        "/eod\n"
-        "/open"
+        "🚀 Risk Model AI Online\n"
+        "/scan - Scan setups\n"
+        "/stocks - Stock setups\n"
+        "/crypto - Crypto setups\n"
+        "/eod - End of Day Report\n"
+        "/open - Market Open Report"
     )
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     data = scan_market()
 
-    message = "🔥 TOP MARKET SETUPS\n\n"
-
+    message = "🔥 TOP MARKET SETUPS\n\nStocks:\n"
     if data["stocks"]:
         for s in data["stocks"]:
             message += f"{s['ticker']} | {s['price']}$ | {s['change']}%\n"
-            message += f"Size: {s['position_size']} shares | Stop: {s['stop']}$\n\n"
+            message += f"Size: {s['position_size']} | Stop: {s['stop']}$\n\n"
     else:
         message += "No strong stock setups.\n\n"
 
+    message += "Crypto:\n"
     if data["crypto"]:
-        for s in data["crypto"]:
-            message += f"{s['ticker']} | {s['price']}$ | {s['change']}%\n"
-            message += f"Size: {s['position_size']} units | Stop: {s['stop']}$\n\n"
+        for c in data["crypto"]:
+            message += f"{c['ticker']} | {c['price']}$ | {c['change']}%\n"
+            message += f"Size: {c['position_size']} | Stop: {c['stop']}$\n\n"
     else:
         message += "No strong crypto setups.\n"
 
@@ -55,18 +57,24 @@ async def open_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = generate_open_report()
     await update.message.reply_text(report)
 
+# ===============================
+# AUTO ALERTS
+# ===============================
+
 async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
-
     data = scan_market()
-
     if data["stocks"] or data["crypto"]:
-        message = "🚨 NEW SETUP ALERT\n\n"
+        message = "🚨 AUTO SETUP ALERT\n\n"
 
-        for s in data["stocks"]:
-            message += f"{s['ticker']} | {s['change']}%\n"
+        if data["stocks"]:
+            message += "Stocks:\n"
+            for s in data["stocks"]:
+                message += f"{s['ticker']} | {s['change']}% | Size {s['position_size']}\n"
 
-        for s in data["crypto"]:
-            message += f"{s['ticker']} | {s['change']}%\n"
+        if data["crypto"]:
+            message += "\nCrypto:\n"
+            for c in data["crypto"]:
+                message += f"{c['ticker']} | {c['change']}% | Size {c['position_size']}\n"
 
         await context.bot.send_message(chat_id=CHAT_ID, text=message)
 
@@ -79,7 +87,6 @@ async def auto_eod(context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 
 def main():
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -89,10 +96,13 @@ def main():
     app.add_handler(CommandHandler("eod", eod))
     app.add_handler(CommandHandler("open", open_market))
 
+    # Auto scan every 10 minutes
     app.job_queue.run_repeating(auto_scan, interval=600, first=10)
+
+    # Auto EOD report at 16:05 if needed
     app.job_queue.run_daily(auto_eod, time=datetime.time(hour=16, minute=5))
 
-    print("Bot running...")
+    print("Bot running.")
     app.run_polling()
 
 if __name__ == "__main__":
