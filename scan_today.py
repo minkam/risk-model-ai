@@ -1,50 +1,63 @@
 import numpy as np
 import joblib
 import yfinance as yf
+import time
 from universe import build_universe
 
 MODEL_PATH = "swing_model.pkl"
 model = joblib.load(MODEL_PATH)
 
-def _prepare_features(df):
+last_scan_time = 0
+cached_results = None
+
+
+# ==============================
+# FEATURE ENGINE
+# ==============================
+
+def prepare_features(df):
     df["return"] = df["Close"].pct_change()
     df["sma20"] = df["Close"].rolling(20).mean()
     df["sma50"] = df["Close"].rolling(50).mean()
     df["volatility"] = df["return"].rolling(10).std()
-    df = df.dropna()
+    df.dropna(inplace=True)
     return df
 
-def _download_stock(symbol: str):
-    return yf.download(symbol, period="6mo", interval="1d", progress=False)
 
-def _download_crypto(symbol: str):
-    # yfinance crypto tickers look like "BTC-USD"
-    # Binance tickers come like "BTCUSDT" -> convert to "BTC-USD" style for yfinance
-    if symbol.endswith("USDT"):
-        base = symbol.replace("USDT", "")
-        yf_sym = f"{base}-USD"
-    else:
-        yf_sym = symbol
-    t = yf.Ticker(yf_sym)
-    df = t.history(period="6mo", interval="1d")
-    return df, yf_sym
+# ==============================
+# BATCH DOWNLOAD
+# ==============================
 
-def scan_symbol(symbol: str, is_crypto: bool):
+def batch_download(symbols):
+    data = yf.download(
+        symbols,
+        period="3mo",
+        interval="1d",
+        group_by="ticker",
+        auto_adjust=True,
+        progress=False,
+        threads=True
+    )
+    return data
+
+
+# ==============================
+# PROCESS SYMBOL
+# ==============================
+
+def process_symbol(symbol, data):
     try:
-        if is_crypto:
-            df, mapped = _download_crypto(symbol)
-            symbol_out = mapped
-        else:
-            df = _download_stock(symbol)
-            symbol_out = symbol
-
-        if df is None or df.empty or len(df) < 80:
+        df = data[symbol].copy()
+        if df.empty or len(df) < 60:
             return None
 
-        df = _prepare_features(df)
+        df = prepare_features(df)
+        if df.empty:
+            return None
+
         latest = df.iloc[-1]
 
-        X = np.array([[
+        X = np.array([[ 
             float(latest["return"]),
             float(latest["Close"] / latest["sma20"]),
             float(latest["Close"] / latest["sma50"]),
@@ -53,7 +66,6 @@ def scan_symbol(symbol: str, is_crypto: bool):
 
         prob = float(model.predict_proba(X)[0][1])
 
-        # High probability only
         if prob < 0.85:
             return None
 
@@ -62,29 +74,50 @@ def scan_symbol(symbol: str, is_crypto: bool):
         target = entry * 1.10
 
         return {
-            "symbol": symbol_out,
+            "symbol": symbol,
             "prob": round(prob, 3),
             "entry": round(entry, 2),
             "stop": round(stop, 2),
             "target": round(target, 2),
         }
 
-    except:
+    except Exception:
         return None
 
+
+# ==============================
+# MAIN SCANNER
+# ==============================
+
 def scan_market():
+    global last_scan_time, cached_results
+
+    # 5 minute cache
+    if time.time() - last_scan_time < 300 and cached_results:
+        return cached_results
+
     stocks, crypto = build_universe()
+
+    # Hard limit universe to protect Railway
+    stocks = stocks[:25]
+    crypto = crypto[:15]
+
+    all_symbols = stocks + crypto
+
+    data = batch_download(all_symbols)
+
     results = []
 
-    for s in stocks:
-        r = scan_symbol(s, is_crypto=False)
-        if r:
-            results.append(r)
-
-    for c in crypto:
-        r = scan_symbol(c, is_crypto=True)
+    for symbol in all_symbols:
+        r = process_symbol(symbol, data)
         if r:
             results.append(r)
 
     results.sort(key=lambda x: x["prob"], reverse=True)
-    return results[:12]
+
+    final = results[:12]
+
+    cached_results = final
+    last_scan_time = time.time()
+
+    return final

@@ -1,151 +1,153 @@
 import requests
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
 
 FMP_API_KEY = os.getenv("FMP_API_KEY")
-
 BASE_URL = "https://financialmodelingprep.com/api/v3"
 
-# ==============================
-# LIVE STOCK WINNERS & LOSERS
-# ==============================
+session = requests.Session()
+session.headers.update({"User-Agent": "RiskModelBot/1.0"})
 
-def get_stock_movers():
+last_scan_time = 0
+cached_data = None
+
+
+# ===================================
+# SAFE REQUEST
+# ===================================
+
+def safe_get(url):
     try:
-        url = f"{BASE_URL}/stock_market/gainers?apikey={FMP_API_KEY}"
-        gainers = requests.get(url).json()
+        response = session.get(url, timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return []
 
-        url = f"{BASE_URL}/stock_market/losers?apikey={FMP_API_KEY}"
-        losers = requests.get(url).json()
 
-        return gainers[:5], losers[:5]
-    except:
-        return [], []
-
-# ==============================
-# LIVE CRYPTO MOVERS
-# ==============================
-
-def get_crypto_movers():
-    try:
-        url = f"{BASE_URL}/cryptocurrency/list?apikey={FMP_API_KEY}"
-        data = requests.get(url).json()
-
-        # Sort by % change 24h
-        sorted_data = sorted(data, key=lambda x: float(x.get("changesPercentage", 0)), reverse=True)
-
-        winners = sorted_data[:5]
-        losers = sorted_data[-5:]
-
-        return winners, losers
-    except:
-        return [], []
-
-# ==============================
-# SETUP SCANNER (Momentum Breakout)
-# ==============================
+# ===================================
+# STOCK MOMENTUM SCANNER (IMPROVED)
+# ===================================
 
 def scan_market():
+    global last_scan_time, cached_data
+
+    # Prevent spamming API within 60 sec
+    if time.time() - last_scan_time < 60 and cached_data:
+        return cached_data
+
     stock_setups = []
     crypto_setups = []
 
-    try:
-        gainers_url = f"{BASE_URL}/stock_market/gainers?apikey={FMP_API_KEY}"
-        stocks = requests.get(gainers_url).json()
+    # ===== STOCK SCAN =====
+    stocks = safe_get(f"{BASE_URL}/stock_market/gainers?apikey={FMP_API_KEY}")
 
-        for s in stocks[:10]:
+    for s in stocks[:15]:
+        try:
             price = float(s["price"])
-            change = float(s["changesPercentage"].replace("%",""))
+            change = float(s["changesPercentage"].replace("%", ""))
+            volume = float(s.get("volume", 0))
 
-            if change > 3:
-                stop = round(price * 0.97, 2)
+            # Penny filter
+            if price < 20 and change > 4 and volume > 500000:
+
+                stop = round(price * 0.95, 2)
                 risk = 0.01
                 size = round((100000 * risk) / (price - stop), 2)
 
                 stock_setups.append({
                     "ticker": s["symbol"],
                     "price": price,
-                    "change": round(change,2),
+                    "change": round(change, 2),
                     "position_size": size,
                     "stop": stop
                 })
 
-    except:
-        pass
+        except:
+            continue
 
-    try:
-        crypto_url = f"{BASE_URL}/cryptocurrency/list?apikey={FMP_API_KEY}"
-        cryptos = requests.get(crypto_url).json()
+    # ===== CRYPTO SCAN (LIMITED SET) =====
+    cryptos = safe_get(f"{BASE_URL}/cryptocurrency/list?apikey={FMP_API_KEY}")
 
-        for c in cryptos:
+    for c in cryptos[:50]:  # limit scanning size
+        try:
             change = float(c.get("changesPercentage", 0))
             price = float(c.get("price", 0))
 
-            if change > 4:
-                stop = round(price * 0.96, 2)
+            if change > 5:
+
+                stop = round(price * 0.94, 2)
                 size = round((100000 * 0.01) / (price - stop), 2)
 
                 crypto_setups.append({
                     "ticker": c["symbol"],
                     "price": price,
-                    "change": round(change,2),
+                    "change": round(change, 2),
                     "position_size": size,
                     "stop": stop
                 })
 
-        crypto_setups = crypto_setups[:5]
+        except:
+            continue
 
-    except:
-        pass
+    crypto_setups = sorted(crypto_setups, key=lambda x: x["change"], reverse=True)[:5]
 
-    return {"stocks": stock_setups, "crypto": crypto_setups}
+    result = {"stocks": stock_setups, "crypto": crypto_setups}
 
-# ==============================
-# END OF DAY REPORT
-# ==============================
+    cached_data = result
+    last_scan_time = time.time()
+
+    return result
+
+
+# ===================================
+# EOD REPORT
+# ===================================
 
 def generate_eod_report():
-    stock_winners, stock_losers = get_stock_movers()
-    crypto_winners, crypto_losers = get_crypto_movers()
+    gainers = safe_get(f"{BASE_URL}/stock_market/gainers?apikey={FMP_API_KEY}")[:5]
+    losers = safe_get(f"{BASE_URL}/stock_market/losers?apikey={FMP_API_KEY}")[:5]
+
+    cryptos = safe_get(f"{BASE_URL}/cryptocurrency/list?apikey={FMP_API_KEY}")
+    crypto_sorted = sorted(cryptos, key=lambda x: float(x.get("changesPercentage", 0)), reverse=True)
+
+    crypto_winners = crypto_sorted[:5]
+    crypto_losers = crypto_sorted[-5:]
 
     report = "📊 END OF DAY REPORT\n\n"
 
-    report += "🔥 Top 5 Stock Winners:\n"
-    for s in stock_winners:
+    report += "🔥 Top Stock Winners:\n"
+    for s in gainers:
         report += f"{s['symbol']} | {s['price']}$ | {s['changesPercentage']}\n"
 
-    report += "\n📉 Top 5 Stock Losers:\n"
-    for s in stock_losers:
+    report += "\n📉 Top Stock Losers:\n"
+    for s in losers:
         report += f"{s['symbol']} | {s['price']}$ | {s['changesPercentage']}\n"
 
-    report += "\n🪙 Top 5 Crypto Winners:\n"
+    report += "\n🪙 Top Crypto Winners:\n"
     for c in crypto_winners:
         report += f"{c['symbol']} | {c['price']}$ | {c['changesPercentage']}%\n"
 
-    report += "\n📉 Top 5 Crypto Losers:\n"
+    report += "\n📉 Top Crypto Losers:\n"
     for c in crypto_losers:
         report += f"{c['symbol']} | {c['price']}$ | {c['changesPercentage']}%\n"
 
     return report
 
-# ==============================
-# MARKET OPEN REPORT
-# ==============================
+
+# ===================================
+# OPEN REPORT
+# ===================================
 
 def generate_open_report():
-    stock_winners, _ = get_stock_movers()
-    crypto_winners, _ = get_crypto_movers()
+    gainers = safe_get(f"{BASE_URL}/stock_market/gainers?apikey={FMP_API_KEY}")[:5]
 
     report = "🔔 MARKET OPEN REPORT\n\n"
 
-    report += "🚀 Early Stock Momentum:\n"
-    for s in stock_winners:
+    for s in gainers:
         report += f"{s['symbol']} | {s['changesPercentage']}\n"
-
-    report += "\n🪙 Early Crypto Momentum:\n"
-    for c in crypto_winners:
-        report += f"{c['symbol']} | {c['changesPercentage']}%\n"
 
     return report

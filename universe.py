@@ -1,7 +1,7 @@
 import yfinance as yf
 import requests
+import time
 
-# ---- STOCKS ----
 BASE_STOCKS = [
     "AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA",
     "AMD","SHOP","PLTR","CRWD","SNOW","DDOG","COIN",
@@ -14,38 +14,94 @@ PENNY_CANDIDATES = [
     "NKLA","MULN"
 ]
 
+last_universe_build = 0
+cached_universe = None
+
+
+# ==============================
+# PENNY FILTER (BATCHED)
+# ==============================
+
 def get_penny_stocks():
-    valid = []
-    for symbol in PENNY_CANDIDATES:
-        try:
-            df = yf.download(symbol, period="5d", progress=False)
-            if not df.empty:
+    try:
+        data = yf.download(
+            PENNY_CANDIDATES,
+            period="5d",
+            interval="1d",
+            group_by="ticker",
+            progress=False,
+            threads=True
+        )
+
+        valid = []
+
+        for symbol in PENNY_CANDIDATES:
+            try:
+                df = data[symbol]
+                if df.empty:
+                    continue
+
                 last = float(df["Close"].iloc[-1])
+
                 if 0.5 <= last < 5:
                     valid.append(symbol)
-        except:
-            continue
-    return valid
 
-# ---- CRYPTO (AUTO) ----
-# Uses Binance 24hr volume list, returns top ~50 USDT pairs
-def get_top_crypto(limit=50):
-    url = "https://api.binance.com/api/v3/ticker/24hr"
-    data = requests.get(url, timeout=15).json()
+            except:
+                continue
 
-    # Sort by quoteVolume desc
-    data = sorted(data, key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
+        return valid
 
-    top = []
-    for item in data:
-        sym = item.get("symbol", "")
-        if sym.endswith("USDT"):
-            top.append(sym)
-        if len(top) >= limit:
-            break
-    return top
+    except:
+        return []
+
+
+# ==============================
+# CRYPTO FILTER (LIMITED)
+# ==============================
+
+def get_top_crypto(limit=15):
+    try:
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        data = requests.get(url, timeout=5).json()
+
+        data = sorted(
+            data,
+            key=lambda x: float(x.get("quoteVolume", 0)),
+            reverse=True
+        )
+
+        top = []
+
+        for item in data:
+            sym = item.get("symbol", "")
+            if sym.endswith("USDT"):
+                top.append(sym)
+            if len(top) >= limit:
+                break
+
+        return top
+
+    except:
+        return []
+
+
+# ==============================
+# BUILD UNIVERSE (CACHED)
+# ==============================
 
 def build_universe():
-    stocks = list(set(BASE_STOCKS + get_penny_stocks()))
-    crypto = get_top_crypto(limit=50)
-    return stocks, crypto
+    global last_universe_build, cached_universe
+
+    # Cache for 10 minutes
+    if time.time() - last_universe_build < 600 and cached_universe:
+        return cached_universe
+
+    penny = get_penny_stocks()
+    stocks = list(set(BASE_STOCKS + penny))
+
+    crypto = get_top_crypto(limit=15)
+
+    cached_universe = (stocks, crypto)
+    last_universe_build = time.time()
+
+    return cached_universe
