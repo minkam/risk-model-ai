@@ -2,40 +2,52 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import time
+from universe import build_universe
 
-STOCK_UNIVERSE = [
-    "AAPL","MSFT","NVDA","TSLA","META","AMZN","GOOGL","AMD",
-    "PLTR","COIN","SHOP","CRWD","SNOW","ROKU","ZS","DDOG",
-    "NFLX","PANW","ADBE","INTC","BA","JPM","GS","XOM"
-]
-
-CRYPTO_UNIVERSE = [
-    "BTC-USD","ETH-USD","SOL-USD","AVAX-USD",
-    "DOGE-USD","XRP-USD","ADA-USD","LINK-USD"
-]
+PORTFOLIO_SIZE = 100000
+RISK_PER_TRADE = 0.01
 
 last_scan_time = 0
-cached_result = None
-
-
-# ==============================
-# FEATURE ENGINE
-# ==============================
+cached_results = None
 
 def calculate_features(df):
     df["return"] = df["Close"].pct_change()
-    df["volume_avg"] = df["Volume"].rolling(20).mean()
-    df["relative_volume"] = df["Volume"] / df["volume_avg"]
-    df["momentum_7d"] = df["Close"].pct_change(7)
-    df["momentum_3d"] = df["Close"].pct_change(3)
+    df["sma20"] = df["Close"].rolling(20).mean()
+    df["sma50"] = df["Close"].rolling(50).mean()
+    df["vol_avg"] = df["Volume"].rolling(20).mean()
+    df["rel_vol"] = df["Volume"] / df["vol_avg"]
+    df["mom7"] = df["Close"].pct_change(7)
+    df["mom3"] = df["Close"].pct_change(3)
+    df.dropna(inplace=True)
     return df
 
+def score_symbol(df):
+    last = df.iloc[-1]
+    score = (
+        (last["mom7"] * 2) +
+        (last["mom3"] * 1.5) +
+        (last["rel_vol"] * 1) +
+        (last["return"] * 2)
+    )
+    if last["Close"] > last["sma20"]:
+        score += 0.5
+    if last["sma20"] > last["sma50"]:
+        score += 0.5
+    return score
 
-# ==============================
-# BATCH SCAN
-# ==============================
+def position_size(entry, stop):
+    risk_amount = PORTFOLIO_SIZE * RISK_PER_TRADE
+    return round(risk_amount / (entry - stop), 2)
 
-def batch_scan(symbols):
+def scan_market():
+    global last_scan_time, cached_results
+
+    if time.time() - last_scan_time < 300 and cached_results:
+        return cached_results
+
+    stocks, crypto = build_universe()
+    symbols = stocks[:40]
+
     data = yf.download(
         symbols,
         period="3mo",
@@ -51,52 +63,34 @@ def batch_scan(symbols):
     for symbol in symbols:
         try:
             df = data[symbol].copy()
-            if df.empty:
+            if len(df) < 60:
                 continue
 
             df = calculate_features(df)
-            df.dropna(inplace=True)
+            score = score_symbol(df)
 
-            last = df.iloc[-1]
+            if score < 1.5:
+                continue
 
-            score = (
-                (last["momentum_7d"] * 2) +
-                (last["momentum_3d"] * 1.5) +
-                (last["relative_volume"] * 0.5)
-            )
+            entry = float(df["Close"].iloc[-1])
+            stop = entry * 0.95
+            target = entry * 1.12
 
             results.append({
                 "symbol": symbol,
-                "price": round(float(last["Close"]), 2),
-                "score": round(float(score), 3)
+                "entry": round(entry, 2),
+                "stop": round(stop, 2),
+                "target": round(target, 2),
+                "size": position_size(entry, stop),
+                "score": round(score, 3)
             })
 
-        except Exception:
+        except:
             continue
 
-    return sorted(results, key=lambda x: x["score"], reverse=True)
+    results = sorted(results, key=lambda x: x["score"], reverse=True)[:10]
 
-
-# ==============================
-# MAIN SCANNER
-# ==============================
-
-def scan_market():
-    global last_scan_time, cached_result
-
-    # Cache for 5 minutes
-    if time.time() - last_scan_time < 300 and cached_result:
-        return cached_result
-
-    stock_results = batch_scan(STOCK_UNIVERSE)
-    crypto_results = batch_scan(CRYPTO_UNIVERSE)
-
-    result = {
-        "stocks": stock_results[:5],
-        "crypto": crypto_results[:5]
-    }
-
-    cached_result = result
+    cached_results = results
     last_scan_time = time.time()
 
-    return result
+    return results
