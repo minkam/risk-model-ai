@@ -1,118 +1,83 @@
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import time
-from universe import build_universe
+import os
+import asyncio
+import datetime
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from zoneinfo import ZoneInfo
 
-PORTFOLIO_SIZE = 100000
-RISK_PER_TRADE = 0.01
+from scan_engine import scan_market
 
-last_scan_time = 0
-cached_results = None
+load_dotenv()
 
-
-def calculate_features(df):
-    df["return"] = df["Close"].pct_change()
-    df["sma20"] = df["Close"].rolling(20).mean()
-    df["sma50"] = df["Close"].rolling(50).mean()
-    df["vol_avg"] = df["Volume"].rolling(20).mean()
-    df["rel_vol"] = df["Volume"] / df["vol_avg"]
-    df["mom7"] = df["Close"].pct_change(7)
-    df["mom3"] = df["Close"].pct_change(3)
-    df.dropna(inplace=True)
-    return df
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
 
-def score_symbol(df):
-    last = df.iloc[-1]
-    score = (
-        (last["mom7"] * 2) +
-        (last["mom3"] * 1.5) +
-        (last["rel_vol"] * 1) +
-        (last["return"] * 2)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🚀 RiskModel Engine Online\n\n"
+        "/scan\n"
+        "/eod\n"
+        "/open"
     )
 
-    if last["Close"] > last["sma20"]:
-        score += 0.5
-    if last["sma20"] > last["sma50"]:
-        score += 0.5
 
-    return float(score)
+async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    loop = asyncio.get_running_loop()
+    results = await loop.run_in_executor(None, scan_market)
+
+    message = "🔥 LIVE MARKET SETUPS\n\n"
+
+    if results["penny"]:
+        message += "💥 Penny Sniper\n"
+        for r in results["penny"]:
+            message += f"{r['symbol']} | Score: {r['score']} | Entry: {r['entry']}\n"
+        message += "\n"
+
+    if results["swings"]:
+        message += "📈 Momentum Swings\n"
+        for r in results["swings"]:
+            message += f"{r['symbol']} | Score: {r['score']} | Entry: {r['entry']}\n"
+        message += "\n"
+
+    if results["crypto"]:
+        message += "🪙 Crypto Movers\n"
+        for r in results["crypto"]:
+            message += f"{r['symbol']} | {r['change']}%\n"
+
+    if message.strip() == "🔥 LIVE MARKET SETUPS":
+        message += "\nNo strong setups."
+
+    await update.message.reply_text(message)
 
 
-def position_size(entry, stop):
-    risk_amount = PORTFOLIO_SIZE * RISK_PER_TRADE
-    risk_per_share = entry - stop
-    if risk_per_share <= 0:
-        return 0
-    return round(risk_amount / risk_per_share, 2)
+async def auto_alert(context: ContextTypes.DEFAULT_TYPE):
+    results = scan_market()
+
+    if results["penny"] or results["swings"]:
+        msg = "🚨 AUTO MOMENTUM ALERT\n\n"
+
+        for r in results["penny"] + results["swings"]:
+            msg += f"{r['symbol']} | Score: {r['score']} | Entry: {r['entry']}\n"
+
+        await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
 
-def scan_market():
-    global last_scan_time, cached_results
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    if time.time() - last_scan_time < 300 and cached_results:
-        return cached_results
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("scan", scan))
 
-    symbols = build_universe()
+    eastern = ZoneInfo("America/New_York")
 
-    if not symbols:
-        return []
+    app.job_queue.run_repeating(auto_alert, interval=600, first=60)
 
-    try:
-        data = yf.download(
-            symbols,
-            period="3mo",
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False,
-            threads=True
-        )
-    except:
-        return []
+    print("Bot running...")
 
-    results = []
+    app.run_polling(drop_pending_updates=True)
 
-    for symbol in symbols:
-        try:
-            if symbol not in data:
-                continue
 
-            df = data[symbol].copy()
-
-            if df.empty or len(df) < 60:
-                continue
-
-            df = calculate_features(df)
-
-            if df.empty:
-                continue
-
-            score = score_symbol(df)
-
-            if score < 1.5:
-                continue
-
-            entry = float(df["Close"].iloc[-1])
-            stop = entry * 0.95
-            target = entry * 1.12
-
-            results.append({
-                "symbol": symbol,
-                "entry": round(entry, 2),
-                "stop": round(stop, 2),
-                "target": round(target, 2),
-                "size": position_size(entry, stop),
-                "score": round(score, 3)
-            })
-
-        except:
-            continue
-
-    results = sorted(results, key=lambda x: x["score"], reverse=True)[:10]
-
-    cached_results = results
-    last_scan_time = time.time()
-
-    return results
+if __name__ == "__main__":
+    main()
