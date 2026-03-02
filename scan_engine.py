@@ -10,6 +10,7 @@ RISK_PER_TRADE = 0.01
 last_scan_time = 0
 cached_results = None
 
+
 def calculate_features(df):
     df["return"] = df["Close"].pct_change()
     df["sma20"] = df["Close"].rolling(20).mean()
@@ -21,6 +22,7 @@ def calculate_features(df):
     df.dropna(inplace=True)
     return df
 
+
 def score_symbol(df):
     last = df.iloc[-1]
     score = (
@@ -29,15 +31,22 @@ def score_symbol(df):
         (last["rel_vol"] * 1) +
         (last["return"] * 2)
     )
+
     if last["Close"] > last["sma20"]:
         score += 0.5
     if last["sma20"] > last["sma50"]:
         score += 0.5
-    return score
+
+    return float(score)
+
 
 def position_size(entry, stop):
     risk_amount = PORTFOLIO_SIZE * RISK_PER_TRADE
-    return round(risk_amount / (entry - stop), 2)
+    risk_per_share = entry - stop
+    if risk_per_share <= 0:
+        return 0
+    return round(risk_amount / risk_per_share, 2)
+
 
 def scan_market():
     global last_scan_time, cached_results
@@ -45,28 +54,41 @@ def scan_market():
     if time.time() - last_scan_time < 300 and cached_results:
         return cached_results
 
-    stocks, crypto = build_universe()
-    symbols = stocks[:40]
+    symbols = build_universe()
 
-    data = yf.download(
-        symbols,
-        period="3mo",
-        interval="1d",
-        group_by="ticker",
-        auto_adjust=True,
-        progress=False,
-        threads=True
-    )
+    if not symbols:
+        return []
+
+    try:
+        data = yf.download(
+            symbols,
+            period="3mo",
+            interval="1d",
+            group_by="ticker",
+            auto_adjust=True,
+            progress=False,
+            threads=True
+        )
+    except:
+        return []
 
     results = []
 
     for symbol in symbols:
         try:
+            if symbol not in data:
+                continue
+
             df = data[symbol].copy()
-            if len(df) < 60:
+
+            if df.empty or len(df) < 60:
                 continue
 
             df = calculate_features(df)
+
+            if df.empty:
+                continue
+
             score = score_symbol(df)
 
             if score < 1.5:
