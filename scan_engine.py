@@ -1,83 +1,89 @@
-import os
-import asyncio
-import datetime
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from zoneinfo import ZoneInfo
 
-from scan_engine import scan_market
+import yfinance as yf
+import numpy as np
+import time
+from universe import build_universe
 
-load_dotenv()
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+last_scan = 0
+cached_results = None
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🚀 RiskModel Engine Online\n\n"
-        "/scan\n"
-        "/eod\n"
-        "/open"
+def calculate_features(df):
+    df["return"] = df["Close"].pct_change()
+    df["sma20"] = df["Close"].rolling(20).mean()
+    df["volume_avg"] = df["Volume"].rolling(20).mean()
+    df["relative_volume"] = df["Volume"] / df["volume_avg"]
+    df["momentum_7d"] = df["Close"].pct_change(7)
+    df.dropna(inplace=True)
+    return df
+
+
+def score_symbol(df):
+    last = df.iloc[-1]
+    score = (
+        (last["momentum_7d"] * 2) +
+        (last["relative_volume"] * 0.5)
     )
+    return round(float(score), 3)
 
 
-async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(None, scan_market)
+def scan_market():
+    global last_scan, cached_results
 
-    message = "🔥 LIVE MARKET SETUPS\n\n"
+    if time.time() - last_scan < 300 and cached_results:
+        return cached_results
 
-    if results["penny"]:
-        message += "💥 Penny Sniper\n"
-        for r in results["penny"]:
-            message += f"{r['symbol']} | Score: {r['score']} | Entry: {r['entry']}\n"
-        message += "\n"
+    stocks, crypto = build_universe()
+    symbols = stocks + crypto
 
-    if results["swings"]:
-        message += "📈 Momentum Swings\n"
-        for r in results["swings"]:
-            message += f"{r['symbol']} | Score: {r['score']} | Entry: {r['entry']}\n"
-        message += "\n"
+    if not symbols:
+        return []
 
-    if results["crypto"]:
-        message += "🪙 Crypto Movers\n"
-        for r in results["crypto"]:
-            message += f"{r['symbol']} | {r['change']}%\n"
+    try:
+        data = yf.download(
+            symbols,
+            period="3mo",
+            interval="1d",
+            group_by="ticker",
+            auto_adjust=True,
+            progress=False,
+            threads=True
+        )
+    except:
+        return []
 
-    if message.strip() == "🔥 LIVE MARKET SETUPS":
-        message += "\nNo strong setups."
+    results = []
 
-    await update.message.reply_text(message)
+    for symbol in symbols:
+        try:
+            df = data[symbol].copy()
+            if df.empty or len(df) < 30:
+                continue
 
+            df = calculate_features(df)
+            score = score_symbol(df)
 
-async def auto_alert(context: ContextTypes.DEFAULT_TYPE):
-    results = scan_market()
+            if score > 0.5:
+                price = round(float(df["Close"].iloc[-1]), 2)
+                stop = round(price * 0.95, 2)
+                target = round(price * 1.10, 2)
 
-    if results["penny"] or results["swings"]:
-        msg = "🚨 AUTO MOMENTUM ALERT\n\n"
+                results.append({
+                    "symbol": symbol,
+                    "score": score,
+                    "entry": price,
+                    "stop": stop,
+                    "target": target
+                })
 
-        for r in results["penny"] + results["swings"]:
-            msg += f"{r['symbol']} | Score: {r['score']} | Entry: {r['entry']}\n"
+        except:
+            continue
 
-        await context.bot.send_message(chat_id=CHAT_ID, text=msg)
+    results.sort(key=lambda x: x["score"], reverse=True)
 
+    final = results[:10]
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    cached_results = final
+    last_scan = time.time()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("scan", scan))
-
-    eastern = ZoneInfo("America/New_York")
-
-    app.job_queue.run_repeating(auto_alert, interval=600, first=60)
-
-    print("Bot running...")
-
-    app.run_polling(drop_pending_updates=True)
-
-
-if __name__ == "__main__":
-    main()
+    return final
