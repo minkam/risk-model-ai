@@ -21,41 +21,38 @@ if not BOT_TOKEN or not CHAT_ID:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 Risk Model AI Online\n"
-        "/scan - Scan setups\n"
-        "/stocks - Stock setups\n"
-        "/crypto - Crypto setups\n"
-        "/eod - End of Day Report\n"
-        "/open - Market Open Report"
+        "/scan\n"
+        "/eod\n"
+        "/open"
     )
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = scan_market()
 
-    message = "🔥 TOP MARKET SETUPS\n\nStocks:\n"
+    message = "🔥 LIVE MARKET SETUPS\n\n"
+
     if data["stocks"]:
+        message += "Stocks:\n"
         for s in data["stocks"]:
             message += f"{s['ticker']} | {s['price']}$ | {s['change']}%\n"
             message += f"Size: {s['position_size']} | Stop: {s['stop']}$\n\n"
-    else:
-        message += "No strong stock setups.\n\n"
 
-    message += "Crypto:\n"
     if data["crypto"]:
+        message += "Crypto:\n"
         for c in data["crypto"]:
             message += f"{c['ticker']} | {c['price']}$ | {c['change']}%\n"
             message += f"Size: {c['position_size']} | Stop: {c['stop']}$\n\n"
-    else:
-        message += "No strong crypto setups.\n"
+
+    if not data["stocks"] and not data["crypto"]:
+        message += "No strong setups right now."
 
     await update.message.reply_text(message)
 
 async def eod(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    report = generate_eod_report()
-    await update.message.reply_text(report)
+    await update.message.reply_text(generate_eod_report())
 
 async def open_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    report = generate_open_report()
-    await update.message.reply_text(report)
+    await update.message.reply_text(generate_open_report())
 
 # ===============================
 # AUTO ALERTS
@@ -64,23 +61,18 @@ async def open_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
     data = scan_market()
     if data["stocks"] or data["crypto"]:
-        message = "🚨 AUTO SETUP ALERT\n\n"
+        msg = "🚨 AUTO BREAKOUT ALERT\n\n"
 
-        if data["stocks"]:
-            message += "Stocks:\n"
-            for s in data["stocks"]:
-                message += f"{s['ticker']} | {s['change']}% | Size {s['position_size']}\n"
+        for s in data["stocks"]:
+            msg += f"{s['ticker']} | {s['change']}% | Size {s['position_size']}\n"
 
-        if data["crypto"]:
-            message += "\nCrypto:\n"
-            for c in data["crypto"]:
-                message += f"{c['ticker']} | {c['change']}% | Size {c['position_size']}\n"
+        for c in data["crypto"]:
+            msg += f"{c['ticker']} | {c['change']}% | Size {c['position_size']}\n"
 
-        await context.bot.send_message(chat_id=CHAT_ID, text=message)
+        await context.bot.send_message(chat_id=CHAT_ID, text=msg)
 
 async def auto_eod(context: ContextTypes.DEFAULT_TYPE):
-    report = generate_eod_report()
-    await context.bot.send_message(chat_id=CHAT_ID, text=report)
+    await context.bot.send_message(chat_id=CHAT_ID, text=generate_eod_report())
 
 # ===============================
 # MAIN
@@ -91,18 +83,13 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("scan", scan))
-    app.add_handler(CommandHandler("stocks", scan))
-    app.add_handler(CommandHandler("crypto", scan))
     app.add_handler(CommandHandler("eod", eod))
     app.add_handler(CommandHandler("open", open_market))
 
-    # Auto scan every 10 minutes
     app.job_queue.run_repeating(auto_scan, interval=600, first=10)
-
-    # Auto EOD report at 16:05 if needed
     app.job_queue.run_daily(auto_eod, time=datetime.time(hour=16, minute=5))
 
-    print("Bot running.")
+    print("Bot running...")
     app.run_polling()
 
 if __name__ == "__main__":

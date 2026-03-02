@@ -1,172 +1,151 @@
-import yfinance as yf
-import pandas as pd
+import requests
+import os
+from dotenv import load_dotenv
 
-# ===============================
-# MARKET UNIVERSES
-# ===============================
+load_dotenv()
 
-STOCKS = [
-    "AAPL","MSFT","NVDA","TSLA","AMD","AMZN","META","NFLX",
-    "AVGO","JPM","BAC","GS","PLTR","SMCI","COIN","SOFI",
-    "RIVN","LCID","NIO","GME","AMC","BB","FUBO","MAR"
-]
+FMP_API_KEY = os.getenv("FMP_API_KEY")
 
-CRYPTO = [
-    "BTC-USD","ETH-USD","SOL-USD","DOGE-USD",
-    "XRP-USD","ADA-USD","AVAX-USD","LINK-USD","LTC-USD"
-]
+BASE_URL = "https://financialmodelingprep.com/api/v3"
 
-PENNY_STOCKS = [
-    "BB","FUBO","SNDL","NOK","PLUG","GEVO","CLNE","PNRG",
-    "CLF","XELA","SPI","CGC","APHQ","BDR","BOTZ","LRN"
-]
+# ==============================
+# LIVE STOCK WINNERS & LOSERS
+# ==============================
 
-# ===============================
-# SAFE DOWNLOAD
-# ===============================
-
-def download_data(tickers, period="5d"):
+def get_stock_movers():
     try:
-        data = yf.download(
-            tickers=tickers,
-            period=period,
-            group_by="ticker",
-            auto_adjust=True,
-            threads=True,
-            progress=False
-        )
-        return data
-    except Exception:
-        return None
+        url = f"{BASE_URL}/stock_market/gainers?apikey={FMP_API_KEY}"
+        gainers = requests.get(url).json()
 
-# ===============================
-# TOP MOVERS (WINNERS + LOSERS)
-# ===============================
+        url = f"{BASE_URL}/stock_market/losers?apikey={FMP_API_KEY}"
+        losers = requests.get(url).json()
 
-def get_movers(tickers):
-    data = download_data(tickers)
-    if data is None:
-        return []
+        return gainers[:5], losers[:5]
+    except:
+        return [], []
 
-    movers = []
-    for t in tickers:
-        try:
-            df = data[t].dropna()
-            if len(df) < 2:
-                continue
+# ==============================
+# LIVE CRYPTO MOVERS
+# ==============================
 
-            close_today = float(df["Close"].iloc[-1])
-            close_yesterday = float(df["Close"].iloc[-2])
-            pct_change = ((close_today - close_yesterday) / close_yesterday) * 100
+def get_crypto_movers():
+    try:
+        url = f"{BASE_URL}/cryptocurrency/list?apikey={FMP_API_KEY}"
+        data = requests.get(url).json()
 
-            movers.append((t, round(pct_change,2), round(close_today,2)))
-        except Exception:
-            continue
+        # Sort by % change 24h
+        sorted_data = sorted(data, key=lambda x: float(x.get("changesPercentage", 0)), reverse=True)
 
-    return movers
+        winners = sorted_data[:5]
+        losers = sorted_data[-5:]
 
-def top_winners(tickers, n=5):
-    movers = get_movers(tickers)
-    movers.sort(key=lambda x: x[1], reverse=True)
-    return movers[:n]
+        return winners, losers
+    except:
+        return [], []
 
-def top_losers(tickers, n=5):
-    movers = get_movers(tickers)
-    movers.sort(key=lambda x: x[1])  # ascending
-    return movers[:n]
-
-# ===============================
-# SETUP SCANNER
-# ===============================
+# ==============================
+# SETUP SCANNER (Momentum Breakout)
+# ==============================
 
 def scan_market():
-    all_symbols = STOCKS + PENNY_STOCKS + CRYPTO
-    data = download_data(all_symbols)
-
     stock_setups = []
     crypto_setups = []
 
-    if data is None:
-        return {"stocks": [], "crypto": []}
+    try:
+        gainers_url = f"{BASE_URL}/stock_market/gainers?apikey={FMP_API_KEY}"
+        stocks = requests.get(gainers_url).json()
 
-    for sym in all_symbols:
-        try:
-            df = data[sym].dropna()
-            if len(df) < 20:
-                continue
+        for s in stocks[:10]:
+            price = float(s["price"])
+            change = float(s["changesPercentage"].replace("%",""))
 
-            close = float(df["Close"].iloc[-1])
-            prev = float(df["Close"].iloc[-2])
-            volume = float(df["Volume"].iloc[-1])
-            avg_vol = float(df["Volume"].rolling(20).mean().iloc[-1])
-            change = ((close - prev) / prev) * 100
+            if change > 3:
+                stop = round(price * 0.97, 2)
+                risk = 0.01
+                size = round((100000 * risk) / (price - stop), 2)
 
-            # Simple breakout condition
-            if change > 2 and volume > avg_vol:
-                risk = 0.01  # 1% risk per trade
-                stop = round(close * 0.97, 2)
-                size = round((100000 * risk) / (close - stop), 2)
-
-                setup = {
-                    "ticker": sym,
-                    "price": round(close,2),
+                stock_setups.append({
+                    "ticker": s["symbol"],
+                    "price": price,
                     "change": round(change,2),
                     "position_size": size,
                     "stop": stop
-                }
+                })
 
-                if sym.endswith("-USD"):
-                    crypto_setups.append(setup)
-                else:
-                    stock_setups.append(setup)
-        except Exception:
-            continue
+    except:
+        pass
+
+    try:
+        crypto_url = f"{BASE_URL}/cryptocurrency/list?apikey={FMP_API_KEY}"
+        cryptos = requests.get(crypto_url).json()
+
+        for c in cryptos:
+            change = float(c.get("changesPercentage", 0))
+            price = float(c.get("price", 0))
+
+            if change > 4:
+                stop = round(price * 0.96, 2)
+                size = round((100000 * 0.01) / (price - stop), 2)
+
+                crypto_setups.append({
+                    "ticker": c["symbol"],
+                    "price": price,
+                    "change": round(change,2),
+                    "position_size": size,
+                    "stop": stop
+                })
+
+        crypto_setups = crypto_setups[:5]
+
+    except:
+        pass
 
     return {"stocks": stock_setups, "crypto": crypto_setups}
 
-# ===============================
+# ==============================
 # END OF DAY REPORT
-# ===============================
+# ==============================
 
 def generate_eod_report():
-    stock_winners = top_winners(STOCKS + PENNY_STOCKS)
-    stock_losers = top_losers(STOCKS + PENNY_STOCKS)
-    crypto_winners = top_winners(CRYPTO)
-    crypto_losers = top_losers(CRYPTO)
+    stock_winners, stock_losers = get_stock_movers()
+    crypto_winners, crypto_losers = get_crypto_movers()
 
     report = "📊 END OF DAY REPORT\n\n"
 
     report += "🔥 Top 5 Stock Winners:\n"
-    for t,c,p in stock_winners:
-        report += f"{t} | {p}$ | {c}%\n"
+    for s in stock_winners:
+        report += f"{s['symbol']} | {s['price']}$ | {s['changesPercentage']}\n"
 
     report += "\n📉 Top 5 Stock Losers:\n"
-    for t,c,p in stock_losers:
-        report += f"{t} | {p}$ | {c}%\n"
+    for s in stock_losers:
+        report += f"{s['symbol']} | {s['price']}$ | {s['changesPercentage']}\n"
 
     report += "\n🪙 Top 5 Crypto Winners:\n"
-    for t,c,p in crypto_winners:
-        report += f"{t} | {p}$ | {c}%\n"
+    for c in crypto_winners:
+        report += f"{c['symbol']} | {c['price']}$ | {c['changesPercentage']}%\n"
 
     report += "\n📉 Top 5 Crypto Losers:\n"
-    for t,c,p in crypto_losers:
-        report += f"{t} | {p}$ | {c}%\n"
+    for c in crypto_losers:
+        report += f"{c['symbol']} | {c['price']}$ | {c['changesPercentage']}%\n"
 
     return report
 
-# ===============================
+# ==============================
 # MARKET OPEN REPORT
-# ===============================
+# ==============================
 
 def generate_open_report():
-    stock_winners = top_winners(STOCKS + PENNY_STOCKS)
-    crypto_winners = top_winners(CRYPTO)
+    stock_winners, _ = get_stock_movers()
+    crypto_winners, _ = get_crypto_movers()
 
     report = "🔔 MARKET OPEN REPORT\n\n"
+
     report += "🚀 Early Stock Momentum:\n"
-    for t,c,p in stock_winners:
-        report += f"{t} | {c}% | {p}$\n"
+    for s in stock_winners:
+        report += f"{s['symbol']} | {s['changesPercentage']}\n"
+
     report += "\n🪙 Early Crypto Momentum:\n"
-    for t,c,p in crypto_winners:
-        report += f"{t} | {c}% | {p}$\n"
+    for c in crypto_winners:
+        report += f"{c['symbol']} | {c['changesPercentage']}%\n"
+
     return report
