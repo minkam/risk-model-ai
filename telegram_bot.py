@@ -6,7 +6,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from zoneinfo import ZoneInfo
 
-from advanced_scanner import scan_market, generate_eod_report, generate_open_report
+from scan_today import scan_market
+from advanced_scanner import generate_eod_report, generate_open_report
 
 load_dotenv()
 
@@ -14,9 +15,9 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 if not BOT_TOKEN or not CHAT_ID:
-    raise ValueError("BOT_TOKEN or CHAT_ID not found in .env")
+    raise ValueError("BOT_TOKEN or CHAT_ID not found in environment")
 
-scan_running = False  # prevents overlap
+scan_running = False
 
 
 # ===============================
@@ -25,7 +26,7 @@ scan_running = False  # prevents overlap
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🚀 Risk Model AI Online\n"
+        "🚀 Risk Model AI Online\n\n"
         "/scan\n"
         "/eod\n"
         "/open"
@@ -34,9 +35,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_running_loop()
-    data = await loop.run_in_executor(None, scan_market)
+    results = await loop.run_in_executor(None, scan_market)
 
-    await update.message.reply_text(format_message(data))
+    if not results:
+        await update.message.reply_text("🔥 LIVE MARKET SETUPS\n\nNo strong setups right now.")
+        return
+
+    message = "🔥 LIVE MARKET SETUPS\n\n"
+
+    for r in results:
+        message += (
+            f"{r['symbol']} | Prob: {r['prob']}\n"
+            f"Entry: {r['entry']} | Stop: {r['stop']} | Target: {r['target']}\n\n"
+        )
+
+    await update.message.reply_text(message)
 
 
 async def eod(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -52,7 +65,7 @@ async def open_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===============================
-# AUTO ALERTS
+# AUTO JOBS
 # ===============================
 
 async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
@@ -65,13 +78,19 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(None, scan_market)
+        results = await loop.run_in_executor(None, scan_market)
 
-        if data["stocks"] or data["crypto"]:
-            await context.bot.send_message(
-                chat_id=CHAT_ID,
-                text=format_message(data, auto=True)
-            )
+        if results:
+            msg = "🚨 AUTO SIGNAL ALERT\n\n"
+
+            for r in results:
+                msg += (
+                    f"{r['symbol']} | Prob: {r['prob']}\n"
+                    f"Entry: {r['entry']} | Stop: {r['stop']} | Target: {r['target']}\n\n"
+                )
+
+            await context.bot.send_message(chat_id=CHAT_ID, text=msg)
+
     finally:
         scan_running = False
 
@@ -80,31 +99,6 @@ async def auto_eod(context: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_running_loop()
     report = await loop.run_in_executor(None, generate_eod_report)
     await context.bot.send_message(chat_id=CHAT_ID, text=report)
-
-
-# ===============================
-# FORMATTER
-# ===============================
-
-def format_message(data, auto=False):
-    message = "🚨 AUTO BREAKOUT ALERT\n\n" if auto else "🔥 LIVE MARKET SETUPS\n\n"
-
-    if data["stocks"]:
-        message += "Stocks:\n"
-        for s in data["stocks"]:
-            message += f"{s['ticker']} | {s['price']}$ | {s['change']}%\n"
-            message += f"Size: {s['position_size']} | Stop: {s['stop']}$\n\n"
-
-    if data["crypto"]:
-        message += "Crypto:\n"
-        for c in data["crypto"]:
-            message += f"{c['ticker']} | {c['price']}$ | {c['change']}%\n"
-            message += f"Size: {c['position_size']} | Stop: {c['stop']}$\n\n"
-
-    if not data["stocks"] and not data["crypto"]:
-        message += "No strong setups right now."
-
-    return message
 
 
 # ===============================
@@ -121,11 +115,16 @@ def main():
 
     eastern = ZoneInfo("America/New_York")
 
-    app.job_queue.run_repeating(auto_scan, interval=600, first=10)
-    app.job_queue.run_daily(auto_eod, time=datetime.time(hour=16, minute=5, tzinfo=eastern))
+    app.job_queue.run_repeating(auto_scan, interval=600, first=15)
+    app.job_queue.run_daily(
+        auto_eod,
+        time=datetime.time(hour=16, minute=5, tzinfo=eastern)
+    )
 
     print("Bot running...")
-    app.run_polling()
+
+    # IMPORTANT: This prevents restart conflicts
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
