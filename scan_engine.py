@@ -12,6 +12,10 @@ last_scan = 0
 cached_results = None
 
 
+# ===============================
+# FETCH INTRADAY DATA (30min)
+# ===============================
+
 def fetch_intraday(symbol):
     try:
         url = f"{BASE_URL}/time_series"
@@ -21,6 +25,7 @@ def fetch_intraday(symbol):
             "outputsize": 100,
             "apikey": API_KEY
         }
+
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
 
@@ -28,6 +33,7 @@ def fetch_intraday(symbol):
             return None
 
         df = pd.DataFrame(data["values"])
+
         df = df.astype({
             "open": float,
             "high": float,
@@ -37,17 +43,24 @@ def fetch_intraday(symbol):
         })
 
         df = df.sort_values("datetime")
+
         return df
 
     except:
         return None
 
 
+# ===============================
+# MOMENTUM + RVOL SCORING
+# ===============================
+
 def compute_score(df):
+
     df["return"] = df["close"].pct_change()
     df["mom3"] = df["close"].pct_change(3)
     df["mom7"] = df["close"].pct_change(7)
     df["rvol"] = df["volume"] / df["volume"].rolling(10).mean()
+
     df.dropna(inplace=True)
 
     if df.empty:
@@ -61,9 +74,14 @@ def compute_score(df):
         (last["rvol"] * 1)
     )
 
-    prob = min(max(score * 4, 0), 99)
-    return round(prob, 2)
+    probability = min(max(score * 4, 0), 99)
 
+    return round(probability, 2)
+
+
+# ===============================
+# MAIN SCANNER
+# ===============================
 
 def scan_market():
     global last_scan, cached_results
@@ -76,35 +94,43 @@ def scan_market():
 
     results = []
 
-    for symbol in stocks[:20]:
+    # Limit for free tier safety
+    stocks = stocks[:15]
+    crypto = crypto[:5]
+
+    # Scan stocks
+    for symbol in stocks:
         df = fetch_intraday(symbol)
         if df is None:
             continue
 
         prob = compute_score(df)
-        if prob > 60:
+
+        if prob > 55:
             results.append({
                 "symbol": symbol,
                 "prob": prob,
                 "price": round(df["close"].iloc[-1], 2)
             })
 
-        time.sleep(0.5)  # protect free tier
+        time.sleep(0.6)  # protect free tier
 
-    for symbol in crypto[:10]:
+    # Scan crypto
+    for symbol in crypto:
         df = fetch_intraday(symbol)
         if df is None:
             continue
 
         prob = compute_score(df)
-        if prob > 60:
+
+        if prob > 55:
             results.append({
                 "symbol": symbol,
                 "prob": prob,
                 "price": round(df["close"].iloc[-1], 2)
             })
 
-        time.sleep(0.5)
+        time.sleep(0.6)
 
     results = sorted(results, key=lambda x: x["prob"], reverse=True)
 
@@ -114,35 +140,55 @@ def scan_market():
     return cached_results
 
 
+# ===============================
+# EOD REPORT
+# ===============================
+
 def generate_eod_report():
+
     stocks = get_top_movers()[:10]
     report = "📊 EOD TOP MOVERS\n\n"
 
     for symbol in stocks:
+
         df = fetch_intraday(symbol)
         if df is None:
             continue
 
-        change = ((df["close"].iloc[-1] - df["close"].iloc[0]) / df["close"].iloc[0]) * 100
+        change = (
+            (df["close"].iloc[-1] - df["close"].iloc[0]) /
+            df["close"].iloc[0]
+        ) * 100
+
         report += f"{symbol} | {round(change,2)}%\n"
 
-        time.sleep(0.3)
+        time.sleep(0.4)
 
     return report
 
 
+# ===============================
+# OPEN SNAPSHOT
+# ===============================
+
 def generate_open_report():
+
     stocks = get_top_movers()[:10]
-    report = "🔔 OPEN SNAPSHOT\n\n"
+    report = "🔔 MARKET OPEN SNAPSHOT\n\n"
 
     for symbol in stocks:
+
         df = fetch_intraday(symbol)
         if df is None:
             continue
 
-        change = ((df["close"].iloc[-1] - df["close"].iloc[-2]) / df["close"].iloc[-2]) * 100
+        change = (
+            (df["close"].iloc[-1] - df["close"].iloc[-2]) /
+            df["close"].iloc[-2]
+        ) * 100
+
         report += f"{symbol} | {round(change,2)}%\n"
 
-        time.sleep(0.3)
+        time.sleep(0.4)
 
     return report
