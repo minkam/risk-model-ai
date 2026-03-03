@@ -9,9 +9,6 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN not found")
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 Risk Model AI Online\n\n"
@@ -25,11 +22,10 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = await loop.run_in_executor(None, scan_market)
 
     if not results:
-        await update.message.reply_text("No strong momentum setups found.")
+        await update.message.reply_text("No strong setups found.")
         return
 
     message = "🔥 LIVE MOMENTUM SETUPS\n\n"
-
     for r in results:
         message += f"{r['symbol']} | Prob: {r['prob']}% | ${r['price']}\n"
 
