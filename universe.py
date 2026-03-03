@@ -6,31 +6,47 @@ BASE_URL = "https://api.twelvedata.com"
 
 
 def get_top_movers():
-    try:
-        url = f"{BASE_URL}/stocks?exchange=NASDAQ&apikey={API_KEY}"
-        r = requests.get(url, timeout=10)
-        data = r.json()
 
-        symbols = []
-        for item in data.get("data", []):
-            symbols.append(item["symbol"])
+    print("\nFetching REAL movers...")
 
-        return symbols[:50]  # limit for free tier
-    except:
+    url = f"{BASE_URL}/market_movers"
+
+    params = {
+        "apikey": API_KEY
+    }
+
+    r = requests.get(url, params=params)
+    data = r.json()
+
+    gainers = []
+    losers = []
+
+    if "gainers" in data:
+        gainers = [x["symbol"] for x in data["gainers"][:10]]
+
+    if "losers" in data:
+        losers = [x["symbol"] for x in data["losers"][:10]]
+
+    movers = list(set(gainers + losers))
+
+    print("Movers Found:", movers)
+
+    return movers
+
+
+def get_top_crypto():
+
+    url = f"{BASE_URL}/cryptocurrencies"
+    params = {"apikey": API_KEY}
+
+    r = requests.get(url, params=params)
+    data = r.json()
+
+    if "data" not in data:
         return []
 
+    top = [x["symbol"] for x in data["data"][:5]]
 
-def get_top_crypto(limit=10):
-    try:
-        url = f"{BASE_URL}/cryptocurrencies?apikey={API_KEY}"
-        r = requests.get(url, timeout=10)
-        data = r.json()
+    print("Crypto Found:", top)
 
-        symbols = []
-        for item in data.get("data", []):
-            if item["currency_quote"] == "USD":
-                symbols.append(item["symbol"])
-
-        return symbols[:limit]
-    except:
-        return []
+    return top
