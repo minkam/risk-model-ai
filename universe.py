@@ -1,3 +1,4 @@
+print("FMP_API_KEY loaded:", bool(FMP_API_KEY))
 # universe.py
 import os
 import time
