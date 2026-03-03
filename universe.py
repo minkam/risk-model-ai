@@ -4,30 +4,15 @@ import os
 API_KEY = os.getenv("TWELVE_API_KEY")
 BASE_URL = "https://api.twelvedata.com"
 
-# Strong liquid stocks only
-BASE_STOCKS = [
-    "NVDA","TSLA","AMD","AAPL","MSFT",
-    "META","AMZN","SMCI","COIN","NFLX",
-    "PLTR","RIVN","SOFI","INTC","BA",
-    "DIS","UBER","NIO","PYPL","SHOP"
-]
+SYMBOLS = ["NVDA","TSLA","AMD","SMCI","META"]
 
-BASE_CRYPTO = [
-    "BTC/USD",
-    "ETH/USD",
-    "SOL/USD",
-    "DOGE/USD",
-    "XRP/USD"
-]
+def scan_market():
 
+    results = []
 
-def get_top_movers():
+    print("\nLight scan mode active...")
 
-    movers = []
-
-    print("\nFetching daily data for base stocks...")
-
-    for symbol in BASE_STOCKS:
+    for symbol in SYMBOLS:
 
         try:
             url = f"{BASE_URL}/quote"
@@ -36,32 +21,36 @@ def get_top_movers():
                 "apikey": API_KEY
             }
 
-            r = requests.get(url, params=params, timeout=10)
-
-            if r.status_code != 200:
-                continue
+            r = requests.get(url, params=params)
 
             data = r.json()
 
             if "percent_change" not in data:
                 continue
 
-            change = abs(float(data["percent_change"]))
+            change = float(data["percent_change"])
+            price = float(data["close"])
 
-            movers.append((symbol, change))
+            probability = min(abs(change) * 5, 95)
+
+            if abs(change) > 1.5:
+                results.append({
+                    "symbol": symbol,
+                    "prob": round(probability, 1),
+                    "price": price,
+                    "change": round(change,2)
+                })
 
         except:
             continue
 
-    # sort by biggest % move
-    movers.sort(key=lambda x: x[1], reverse=True)
+    print("Results:", results)
 
-    final = [x[0] for x in movers[:6]]
-
-    print("Top movers:", final)
-
-    return final
+    return results
 
 
-def get_top_crypto():
-    return BASE_CRYPTO
+def generate_open_report():
+    return "Open report disabled on free tier."
+
+def generate_eod_report():
+    return "EOD report disabled on free tier."
