@@ -1,5 +1,3 @@
-print("FMP_API_KEY loaded:", bool(FMP_API_KEY))
-# universe.py
 import os
 import time
 import requests
@@ -8,6 +6,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 FMP_API_KEY = os.getenv("FMP_API_KEY")
+
+print("FMP_API_KEY loaded:", bool(FMP_API_KEY))
 BASE_URL = "https://financialmodelingprep.com/api/v3"
 
 _session = requests.Session()
