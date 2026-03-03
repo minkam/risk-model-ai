@@ -13,7 +13,7 @@ cached_results = None
 
 
 # ===============================
-# FETCH INTRADAY DATA (30min)
+# FETCH INTRADAY DATA (DIAGNOSTIC)
 # ===============================
 
 def fetch_intraday(symbol):
@@ -22,14 +22,20 @@ def fetch_intraday(symbol):
         params = {
             "symbol": symbol,
             "interval": "30min",
-            "outputsize": 100,
+            "outputsize": 50,
             "apikey": API_KEY
         }
 
         r = requests.get(url, params=params, timeout=10)
+
+        print(f"\n--- Fetching {symbol} ---")
+        print("Status Code:", r.status_code)
+
         data = r.json()
+        print("Response:", data)
 
         if "values" not in data:
+            print(f"No candle data returned for {symbol}")
             return None
 
         df = pd.DataFrame(data["values"])
@@ -46,12 +52,13 @@ def fetch_intraday(symbol):
 
         return df
 
-    except:
+    except Exception as e:
+        print("Error fetching:", symbol, e)
         return None
 
 
 # ===============================
-# MOMENTUM + RVOL SCORING
+# SCORING
 # ===============================
 
 def compute_score(df):
@@ -80,115 +87,65 @@ def compute_score(df):
 
 
 # ===============================
-# MAIN SCANNER
+# MAIN SCAN (REDUCED SIZE)
 # ===============================
 
 def scan_market():
     global last_scan, cached_results
 
-    if cached_results and time.time() - last_scan < 300:
-        return cached_results
+    stocks = get_top_movers()[:3]
+    crypto = get_top_crypto()[:1]
 
-    stocks = get_top_movers()
-    crypto = get_top_crypto()
+    print("\nStocks to scan:", stocks)
+    print("Crypto to scan:", crypto)
 
     results = []
 
-    # Limit for free tier safety
-    stocks = stocks[:15]
-    crypto = crypto[:5]
-
-    # Scan stocks
     for symbol in stocks:
         df = fetch_intraday(symbol)
         if df is None:
             continue
 
         prob = compute_score(df)
+        print("Probability:", prob)
 
-        if prob > 55:
+        if prob > 50:
             results.append({
                 "symbol": symbol,
                 "prob": prob,
                 "price": round(df["close"].iloc[-1], 2)
             })
 
-        time.sleep(0.6)  # protect free tier
+        time.sleep(1)
 
-    # Scan crypto
     for symbol in crypto:
         df = fetch_intraday(symbol)
         if df is None:
             continue
 
         prob = compute_score(df)
+        print("Probability:", prob)
 
-        if prob > 55:
+        if prob > 50:
             results.append({
                 "symbol": symbol,
                 "prob": prob,
                 "price": round(df["close"].iloc[-1], 2)
             })
 
-        time.sleep(0.6)
+        time.sleep(1)
 
-    results = sorted(results, key=lambda x: x["prob"], reverse=True)
+    print("\nFinal Results:", results)
 
-    cached_results = results[:10]
-    last_scan = time.time()
-
-    return cached_results
+    return results
 
 
 # ===============================
-# EOD REPORT
+# SIMPLE REPORTS (DIAGNOSTIC)
 # ===============================
 
 def generate_eod_report():
-
-    stocks = get_top_movers()[:10]
-    report = "📊 EOD TOP MOVERS\n\n"
-
-    for symbol in stocks:
-
-        df = fetch_intraday(symbol)
-        if df is None:
-            continue
-
-        change = (
-            (df["close"].iloc[-1] - df["close"].iloc[0]) /
-            df["close"].iloc[0]
-        ) * 100
-
-        report += f"{symbol} | {round(change,2)}%\n"
-
-        time.sleep(0.4)
-
-    return report
-
-
-# ===============================
-# OPEN SNAPSHOT
-# ===============================
+    return "EOD diagnostic mode active. Check logs."
 
 def generate_open_report():
-
-    stocks = get_top_movers()[:10]
-    report = "🔔 MARKET OPEN SNAPSHOT\n\n"
-
-    for symbol in stocks:
-
-        df = fetch_intraday(symbol)
-        if df is None:
-            continue
-
-        change = (
-            (df["close"].iloc[-1] - df["close"].iloc[-2]) /
-            df["close"].iloc[-2]
-        ) * 100
-
-        report += f"{symbol} | {round(change,2)}%\n"
-
-        time.sleep(0.4)
-
-    return report
+    return "Open diagnostic mode active. Check logs."
