@@ -55,6 +55,7 @@ def build_universe(limit_each=120):
 
     # 1) Fresh movers
     gainers = _fmp("/stock_market/gainers")[:limit_each]
+    print("FMP gainers length:", len(gainers))
     losers = _fmp("/stock_market/losers")[:limit_each]
     actives = _fmp("/stock_market/actives")[:limit_each]
 
