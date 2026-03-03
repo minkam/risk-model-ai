@@ -1,6 +1,6 @@
-python-telegram-bot[job-queue]==20.6
-yfinance==0.2.65
-pandas==2.2.2
-numpy==1.26.4
-requests==2.32.5
+python-telegram-bot==20.6
+requests==2.32.3
 python-dotenv==1.0.1
+yfinance==0.2.52
+pandas==2.2.3
+numpy==2.2.3

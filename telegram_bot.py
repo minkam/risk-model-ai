@@ -1,113 +1,124 @@
 import os
 import asyncio
 import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from zoneinfo import ZoneInfo
 
 from scan_engine import scan_market
+from reports import generate_open_report, generate_eod_report
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-if not BOT_TOKEN or not CHAT_ID:
-    raise ValueError("Missing BOT_TOKEN or CHAT_ID")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN missing")
+if not CHAT_ID:
+    raise ValueError("CHAT_ID missing")
 
 scan_running = False
 
 
-# ===============================
-# COMMANDS
-# ===============================
+# ==========================================
+# Format Output
+# ==========================================
+
+def format_setups(result):
+    setups = result.get("setups", [])
+    meta = result.get("meta", {})
+
+    if not setups:
+        return (
+            "🔥 LIVE MARKET SCAN\n\n"
+            "No strong setups right now.\n\n"
+            f"Scanned: {meta.get('stocks_scanned',0)} stocks | "
+            f"{meta.get('crypto_scanned',0)} crypto"
+        )
+
+    stocks = []
+    crypto = []
+
+    for s in setups:
+        line = (
+            f"{'🚀' if s['type']=='BREAKOUT' else '📈'} "
+            f"{s['symbol']} | Score: {s['score']} | Prob: {s['prob']}\n"
+            f"Entry: {s['entry']} | Stop: {s['stop']} | Target: {s['target']}\n"
+        )
+
+        if s["bucket"] == "CRYPTO":
+            crypto.append("🪙 " + line)
+        else:
+            stocks.append(line)
+
+    msg = "🔥 LIVE MARKET SETUPS\n\n"
+
+    if stocks:
+        msg += "📊 STOCK SETUPS\n"
+        msg += "\n".join(stocks[:10])
+        msg += "\n\n"
+
+    if crypto:
+        msg += "🪙 CRYPTO SETUPS\n"
+        msg += "\n".join(crypto[:5])
+
+    msg += (
+        f"\n\nScanned: {meta.get('stocks_scanned',0)} stocks | "
+        f"{meta.get('crypto_scanned',0)} crypto"
+    )
+
+    return msg.strip()
+
+
+# ==========================================
+# Commands
+# ==========================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🚀 Risk Model AI Online\n\n"
-        "/scan – Live AI setups\n"
-        "/eod – End of day report\n"
-        "/open – Market open momentum"
+        "/scan - intraday 30m scan\n"
+        "/open - market open movers\n"
+        "/eod - end of day movers\n"
+        "/help"
     )
 
 
-# ===============================
-# LIVE SCAN (AI PROBABILITY)
-# ===============================
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📊 Intraday Small-Cap System\n\n"
+        "• 30m breakout detection\n"
+        "• Early + continuation alerts\n"
+        "• Penny runner optimized\n"
+        "• Crypto labeled separately\n"
+        "• Auto scan every 10 min\n"
+    )
 
-async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(None, scan_market)
-
-    if not results:
-        await update.message.reply_text(
-            "🔥 LIVE MARKET SCAN\n\n"
-            "No high-probability setups right now."
-        )
-        return
-
-    message = "🔥 LIVE AI MOMENTUM SETUPS\n\n"
-
-    for r in results:
-        rr = round((r['target'] - r['entry']) / (r['entry'] - r['stop']), 2)
-
-        message += (
-            f"📈 {r['symbol']} | Prob: {r['prob']}\n"
-            f"Entry: {r['entry']}\n"
-            f"Stop: {r['stop']}\n"
-            f"Target: {r['target']}\n"
-            f"Risk/Reward: 1 : {rr}\n\n"
-        )
-
-    message += "⚡ Powered by Risk Model AI"
-
-    await update.message.reply_text(message)
+    result = await loop.run_in_executor(None, scan_market)
+    await update.message.reply_text(format_setups(result))
 
 
-# ===============================
-# EOD REPORT
-# ===============================
-
-async def eod(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def open_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(None, scan_market)
-
-    if not results:
-        await update.message.reply_text("📊 EOD REPORT\n\nNo strong momentum today.")
-        return
-
-    message = "📊 END OF DAY REPORT\n\nTop Ranked:\n\n"
-
-    for r in results[:5]:
-        message += f"{r['symbol']} | Prob: {r['prob']}\n"
-
-    await update.message.reply_text(message)
+    report = await loop.run_in_executor(None, generate_open_report)
+    await update.message.reply_text(report)
 
 
-# ===============================
-# MARKET OPEN REPORT
-# ===============================
-
-async def open_market(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def eod_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(None, scan_market)
-
-    if not results:
-        await update.message.reply_text("🔔 MARKET OPEN\n\nNo early momentum.")
-        return
-
-    message = "🔔 MARKET OPEN MOMENTUM\n\n"
-
-    for r in results[:5]:
-        message += f"{r['symbol']} | Prob: {r['prob']}\n"
-
-    await update.message.reply_text(message)
+    report = await loop.run_in_executor(None, generate_eod_report)
+    await update.message.reply_text(report)
 
 
-# ===============================
-# AUTO ALERTS (Every 15 Min)
-# ===============================
+# ==========================================
+# Auto Scanner (Every 10 Minutes)
+# ==========================================
 
 async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
     global scan_running
@@ -119,69 +130,66 @@ async def auto_scan(context: ContextTypes.DEFAULT_TYPE):
 
     try:
         loop = asyncio.get_running_loop()
-        results = await loop.run_in_executor(None, scan_market)
+        result = await loop.run_in_executor(None, scan_market)
 
-        if not results:
-            return
+        strong = [s for s in result.get("setups", []) if s["score"] >= 80]
 
-        msg = "🚨 AUTO AI MOMENTUM ALERT\n\n"
-
-        for r in results[:5]:
-            rr = round((r['target'] - r['entry']) / (r['entry'] - r['stop']), 2)
-
-            msg += (
-                f"{r['symbol']} | Prob: {r['prob']}\n"
-                f"Entry: {r['entry']} | Stop: {r['stop']} | Target: {r['target']}\n"
-                f"R:R 1:{rr}\n\n"
+        if strong:
+            payload = {
+                "setups": strong[:8],
+                "meta": result.get("meta", {})
+            }
+            await context.bot.send_message(
+                chat_id=CHAT_ID,
+                text="🚨 STRONG INTRADAY ALERT\n\n" + format_setups(payload)
             )
 
-        await context.bot.send_message(chat_id=CHAT_ID, text=msg)
+    except Exception as e:
+        print("Auto scan error:", e)
 
     finally:
         scan_running = False
 
 
-# ===============================
-# AUTO EOD (4:05 PM ET)
-# ===============================
+# ==========================================
+# Auto Reports
+# ==========================================
+
+async def auto_open(context: ContextTypes.DEFAULT_TYPE):
+    loop = asyncio.get_running_loop()
+    report = await loop.run_in_executor(None, generate_open_report)
+    await context.bot.send_message(chat_id=CHAT_ID, text=report)
+
 
 async def auto_eod(context: ContextTypes.DEFAULT_TYPE):
     loop = asyncio.get_running_loop()
-    results = await loop.run_in_executor(None, scan_market)
-
-    if not results:
-        return
-
-    msg = "📊 AUTO EOD SUMMARY\n\n"
-
-    for r in results[:5]:
-        msg += f"{r['symbol']} | Prob: {r['prob']}\n"
-
-    await context.bot.send_message(chat_id=CHAT_ID, text=msg)
+    report = await loop.run_in_executor(None, generate_eod_report)
+    await context.bot.send_message(chat_id=CHAT_ID, text=report)
 
 
-# ===============================
-# MAIN
-# ===============================
+# ==========================================
+# Main
+# ==========================================
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("scan", scan))
-    app.add_handler(CommandHandler("eod", eod))
-    app.add_handler(CommandHandler("open", open_market))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("scan", scan_cmd))
+    app.add_handler(CommandHandler("open", open_cmd))
+    app.add_handler(CommandHandler("eod", eod_cmd))
 
     eastern = ZoneInfo("America/New_York")
 
-    # Every 15 minutes
-    app.job_queue.run_repeating(auto_scan, interval=900, first=60)
+    # 10-minute scanner
+    app.job_queue.run_repeating(auto_scan, interval=600, first=20)
 
-    # Daily at 4:05 PM ET
-    app.job_queue.run_daily(
-        auto_eod,
-        time=datetime.time(hour=16, minute=5, tzinfo=eastern)
-    )
+    # Open report 9:35 ET
+    app.job_queue.run_daily(auto_open, time=datetime.time(9, 35, tzinfo=eastern))
+
+    # EOD report 4:10 ET
+    app.job_queue.run_daily(auto_eod, time=datetime.time(16, 10, tzinfo=eastern))
 
     print("Bot running...")
 
