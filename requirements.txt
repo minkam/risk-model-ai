@@ -1,4 +1,4 @@
-python-telegram-bot==20.6
+python-telegram-bot[job-queue]==20.6
 requests==2.32.3
 python-dotenv==1.0.1
 yfinance==0.2.52
