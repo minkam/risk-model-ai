@@ -1,123 +1,78 @@
-import os
-import time
 import requests
-from dotenv import load_dotenv
-
-load_dotenv()
-
-FMP_API_KEY = os.getenv("FMP_API_KEY")
-
-print("FMP_API_KEY loaded:", bool(FMP_API_KEY))
-BASE_URL = "https://financialmodelingprep.com/api/v3"
-
-_session = requests.Session()
-_session.headers.update({"User-Agent": "RiskModelBot/1.0"})
+import time
 
 _last_build = 0
 _cached = None
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-def _safe_get(url: str):
+YAHOO_SCREENER = "https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved"
+
+
+def fetch_screener(scr_id, count=100):
     try:
-        r = _session.get(url, timeout=10)
-        r.raise_for_status()
-        return r.json()
+        url = f"{YAHOO_SCREENER}?scrIds={scr_id}&count={count}"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        data = r.json()
+
+        quotes = data["finance"]["result"][0]["quotes"]
+        return [q["symbol"] for q in quotes if "symbol" in q]
+
     except Exception:
         return []
 
 
-def _fmp(endpoint: str):
-    if not FMP_API_KEY:
-        return []
-    sep = "&" if "?" in endpoint else "?"
-    return _safe_get(f"{BASE_URL}{endpoint}{sep}apikey={FMP_API_KEY}")
-
-
-def build_universe(limit_each=120):
-    """
-    Returns dict:
-      {
-        "large_caps": [...],
-        "pennies": [...],
-        "momentum": [...],
-        "all": [...],
-      }
-    """
+def build_universe():
     global _last_build, _cached
+
     if _cached and time.time() - _last_build < 600:
         return _cached
 
-    if not FMP_API_KEY:
-        # Fallback: if no FMP key, return empty and scanner will handle it gracefully.
-        _cached = {"large_caps": [], "pennies": [], "momentum": [], "all": []}
-        _last_build = time.time()
-        return _cached
+    gainers = fetch_screener("day_gainers", 100)
+    losers = fetch_screener("day_losers", 100)
+    actives = fetch_screener("most_actives", 100)
 
-    # 1) Fresh movers
-    gainers = _fmp("/stock_market/gainers")[:limit_each]
-    print("FMP gainers length:", len(gainers))
-    losers = _fmp("/stock_market/losers")[:limit_each]
-    actives = _fmp("/stock_market/actives")[:limit_each]
+    symbols = list(set(gainers + losers + actives))
 
-    raw = []
-    raw.extend(gainers)
-    raw.extend(losers)
-    raw.extend(actives)
+    # Filter US only and remove weird tickers
+    cleaned = []
+    for s in symbols:
+        if "." not in s and "-" not in s:
+            cleaned.append(s)
 
-    # Normalize symbols
-    symbols = []
-    for x in raw:
-        sym = x.get("symbol")
-        if sym and sym.isalpha():
-            symbols.append(sym.upper())
-
-    symbols = list(dict.fromkeys(symbols))  # dedupe, keep order
-
-    # 2) Classify with a single screener call per bucket
-    # Penny candidates: price 0.5-5, volume > 500k
-    pennies = _fmp("/stock-screener?priceMoreThan=0.5&priceLowerThan=5&volumeMoreThan=500000&limit=200")
-    penny_syms = [x.get("symbol", "").upper() for x in pennies if x.get("symbol")]
-    penny_syms = [s for s in penny_syms if s.isalpha()]
-
-    # Large caps: market cap > 10B, price > 5, volume > 1M
-    large = _fmp("/stock-screener?marketCapMoreThan=10000000000&priceMoreThan=5&volumeMoreThan=1000000&limit=200")
-    large_syms = [x.get("symbol", "").upper() for x in large if x.get("symbol")]
-    large_syms = [s for s in large_syms if s.isalpha()]
-
-    # Momentum bucket = fresh movers + some large + some pennies
-    momentum = list(dict.fromkeys(symbols[:150] + large_syms[:100] + penny_syms[:100]))
-
-    all_syms = list(dict.fromkeys(momentum))
+    cleaned = cleaned[:250]
 
     _cached = {
-        "large_caps": large_syms[:200],
-        "pennies": penny_syms[:200],
-        "momentum": momentum[:250],
-        "all": all_syms[:250],
+        "all": cleaned
     }
+
     _last_build = time.time()
     return _cached
 
 
-def get_top_crypto_usdt(limit=25):
-    """
-    Binance 24h tickers by quoteVolume.
-    Returns list like: ["BTCUSDT","ETHUSDT",...]
-    """
+def get_top_crypto_usdt(limit=20):
     try:
-        r = _session.get("https://api.binance.com/api/v3/ticker/24hr", timeout=10)
-        r.raise_for_status()
+        r = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=10)
         data = r.json()
 
-        data = sorted(data, key=lambda x: float(x.get("quoteVolume", 0) or 0), reverse=True)
+        data = sorted(
+            data,
+            key=lambda x: float(x.get("quoteVolume", 0)),
+            reverse=True
+        )
 
         top = []
         for item in data:
             sym = item.get("symbol", "")
             if sym.endswith("USDT"):
-                top.append(sym)
+                base = sym.replace("USDT", "")
+                top.append(f"{base}-USD")
             if len(top) >= limit:
                 break
+
         return top
+
     except Exception:
         return []
