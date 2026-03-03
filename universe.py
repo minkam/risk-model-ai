@@ -4,49 +4,64 @@ import os
 API_KEY = os.getenv("TWELVE_API_KEY")
 BASE_URL = "https://api.twelvedata.com"
 
+# Strong liquid stocks only
+BASE_STOCKS = [
+    "NVDA","TSLA","AMD","AAPL","MSFT",
+    "META","AMZN","SMCI","COIN","NFLX",
+    "PLTR","RIVN","SOFI","INTC","BA",
+    "DIS","UBER","NIO","PYPL","SHOP"
+]
+
+BASE_CRYPTO = [
+    "BTC/USD",
+    "ETH/USD",
+    "SOL/USD",
+    "DOGE/USD",
+    "XRP/USD"
+]
+
 
 def get_top_movers():
 
-    print("\nFetching REAL movers...")
+    movers = []
 
-    url = f"{BASE_URL}/market_movers"
+    print("\nFetching daily data for base stocks...")
 
-    params = {
-        "apikey": API_KEY
-    }
+    for symbol in BASE_STOCKS:
 
-    r = requests.get(url, params=params)
-    data = r.json()
+        try:
+            url = f"{BASE_URL}/quote"
+            params = {
+                "symbol": symbol,
+                "apikey": API_KEY
+            }
 
-    gainers = []
-    losers = []
+            r = requests.get(url, params=params, timeout=10)
 
-    if "gainers" in data:
-        gainers = [x["symbol"] for x in data["gainers"][:10]]
+            if r.status_code != 200:
+                continue
 
-    if "losers" in data:
-        losers = [x["symbol"] for x in data["losers"][:10]]
+            data = r.json()
 
-    movers = list(set(gainers + losers))
+            if "percent_change" not in data:
+                continue
 
-    print("Movers Found:", movers)
+            change = abs(float(data["percent_change"]))
 
-    return movers
+            movers.append((symbol, change))
+
+        except:
+            continue
+
+    # sort by biggest % move
+    movers.sort(key=lambda x: x[1], reverse=True)
+
+    final = [x[0] for x in movers[:6]]
+
+    print("Top movers:", final)
+
+    return final
 
 
 def get_top_crypto():
-
-    url = f"{BASE_URL}/cryptocurrencies"
-    params = {"apikey": API_KEY}
-
-    r = requests.get(url, params=params)
-    data = r.json()
-
-    if "data" not in data:
-        return []
-
-    top = [x["symbol"] for x in data["data"][:5]]
-
-    print("Crypto Found:", top)
-
-    return top
+    return BASE_CRYPTO
