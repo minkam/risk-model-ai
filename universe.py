@@ -1,123 +1,72 @@
-import yfinance as yf
-import pandas as pd
-import numpy as np
+import requests
 import time
-from universe import build_universe, get_top_crypto_usdt
 
-last_scan = 0
-cached_result = None
+_last_build = 0
+_cached = None
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0"
+}
 
-# ===============================
-# Feature Engineering
-# ===============================
-
-def compute_features(df):
-    df["return"] = df["Close"].pct_change()
-    df["rvol"] = df["Volume"] / df["Volume"].rolling(20).mean()
-    df["mom3"] = df["Close"].pct_change(3)
-    df["mom7"] = df["Close"].pct_change(7)
-    df.dropna(inplace=True)
-    return df
+YAHOO_SCREENER = "https://query2.finance.yahoo.com/v1/finance/screener/predefined/saved"
 
 
-def score_symbol(df):
-    last = df.iloc[-1]
-
-    score = (
-        (last["mom7"] * 3) +
-        (last["mom3"] * 2) +
-        (last["rvol"] * 1)
-    )
-
-    probability = min(max(score * 5, 0), 99)
-
-    return round(probability, 2)
-
-
-# ===============================
-# SAFE DOWNLOAD
-# ===============================
-
-def safe_download(symbol):
+def fetch_screener(scr_id, count=100):
     try:
-        df = yf.download(
-            symbol,
-            period="2mo",
-            interval="1d",
-            progress=False,
-            threads=False,
-            auto_adjust=True
-        )
-        return df
+        url = f"{YAHOO_SCREENER}?scrIds={scr_id}&count={count}"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        data = r.json()
+        quotes = data["finance"]["result"][0]["quotes"]
+        return [q["symbol"] for q in quotes if "symbol" in q]
     except:
-        return None
+        return []
 
 
-# ===============================
-# MAIN SCANNER
-# ===============================
+def build_universe():
+    global _last_build, _cached
 
-def scan_market():
-    global last_scan, cached_result
+    if _cached and time.time() - _last_build < 600:
+        return _cached
 
-    if cached_result and time.time() - last_scan < 300:
-        return cached_result
+    gainers = fetch_screener("day_gainers", 100)
+    losers = fetch_screener("day_losers", 100)
+    actives = fetch_screener("most_actives", 100)
 
-    universe = build_universe()["all"]
-    crypto = get_top_crypto_usdt(15)
+    symbols = list(set(gainers + losers + actives))
 
-    results = []
+    cleaned = []
+    for s in symbols:
+        if "." not in s and "-" not in s:
+            cleaned.append(s)
 
-    # Limit to prevent rate limits
-    universe = universe[:60]
-    crypto = crypto[:10]
+    cleaned = cleaned[:80]  # keep safe for Yahoo rate limit
 
-    # Scan Stocks
-    for symbol in universe:
-        df = safe_download(symbol)
-        if df is None or df.empty or len(df) < 30:
-            continue
+    _cached = {"all": cleaned}
+    _last_build = time.time()
 
-        df = compute_features(df)
-        if df.empty:
-            continue
+    return _cached
 
-        prob = score_symbol(df)
 
-        if prob > 65:
-            results.append({
-                "symbol": symbol,
-                "prob": prob,
-                "price": round(df["Close"].iloc[-1], 2)
-            })
+def get_top_crypto_usdt(limit=10):
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=10)
+        data = r.json()
 
-        time.sleep(0.25)  # critical to avoid rate limit
+        data = sorted(
+            data,
+            key=lambda x: float(x.get("quoteVolume", 0)),
+            reverse=True
+        )
 
-    # Scan Crypto
-    for symbol in crypto:
-        df = safe_download(symbol)
-        if df is None or df.empty or len(df) < 30:
-            continue
+        top = []
+        for item in data:
+            sym = item.get("symbol", "")
+            if sym.endswith("USDT"):
+                base = sym.replace("USDT", "")
+                top.append(f"{base}-USD")
+            if len(top) >= limit:
+                break
 
-        df = compute_features(df)
-        if df.empty:
-            continue
-
-        prob = score_symbol(df)
-
-        if prob > 65:
-            results.append({
-                "symbol": symbol,
-                "prob": prob,
-                "price": round(df["Close"].iloc[-1], 2)
-            })
-
-        time.sleep(0.25)
-
-    results = sorted(results, key=lambda x: x["prob"], reverse=True)
-
-    cached_result = results[:12]
-    last_scan = time.time()
-
-    return cached_result
+        return top
+    except:
+        return []
